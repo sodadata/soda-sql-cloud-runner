@@ -1,0 +1,6 @@
+# This example setup uses a PostgreSQL database and therefore
+# depends on soda-sql-postgresql. Your project might need a
+# different warehouse package. Check the Soda SQL Docs for more
+# information. https://docs.soda.io/soda-sql/installation.html#install
+
+soda-sql-postgresql==2.1.0b17

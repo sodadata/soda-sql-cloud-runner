@@ -1,0 +1,347 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  A stack for deploying and running Soda SQL Scans in AWS.
+  See https://github.com/sodadata/soda-sql-cloud-deployment-templates
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: soda-sql-runners
+    Description: The name of the ECS Cluster to deploy to
+  Image:
+    Type: String
+    Default: sodadata/soda-sql-cloud-runner:latest
+    Description: Docker Image used to execute the Soda SQL scans.
+  VpcCidr:
+    Type: String
+    AllowedPattern: '((\d{1,3})\.){3}\d{1,3}/\d{1,2}'
+    Default: '10.1.0.0/16'
+    Description: The CIDR for the VPC (eg 10.0.0.0/16)
+  PrivateSubnetCidr:
+    Type: String
+    AllowedPattern: '((\d{1,3})\.){3}\d{1,3}/\d{1,2}'
+    Default: '10.1.2.0/24'
+    Description: The CIDR for the Private subnet (eg 10.1.2.0/24)
+  PublicSubnetCidr:
+    Type: String
+    AllowedPattern: '((\d{1,3})\.){3}\d{1,3}/\d{1,2}'
+    Default: '10.1.0.0/24'
+    Description: The CIDR for the Public subnet (eg 10.1.0.0/24)
+  ApiKeyIdParam:
+    Type: String
+    Description: The Soda Cloud API KEY ID
+  ApiKeySecretParam:
+    Type: String
+    Description: The Soda Cloud API KEY SECRET
+  DemoPostgresUsernameParam:
+    Type: String
+    Description: Demo Postgres username
+  DemoPostgresPasswordParam:
+    Type: String
+    Description: Demo Postgres password
+
+
+Resources:
+  # Each 'TaskDefinition' represents a Soda SQL Job and is responsible for running
+  # a single Soda Sql Scan.
+  #
+  # You need one TaskDefinition for every scan YAML file in your project.
+  TaskDefinitionCars:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: LogGroup
+    Properties:
+      Family: !Ref ClusterName
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 256
+      Memory: 512
+      ExecutionRoleArn: !GetAtt 'ExecutionRole.Arn'
+      TaskRoleArn: !GetAtt 'TaskRole.Arn'
+      ContainerDefinitions:
+        - Name: !Join ['_', [!Ref ClusterName, Cars]]
+          Image: !Ref Image
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: Cars
+          Secrets:
+            - Name: SODA_CLOUD_API_KEY_SECRET
+              ValueFrom: !Ref ApiKeySecret
+            - Name: SODA_CLOUD_API_KEY_ID
+              ValueFrom: !Ref ApiKeyId
+            - Name: POSTGRES_USERNAME
+              ValueFrom: !Ref DemoPostgresUsername
+            - Name: POSTGRES_PASSWORD
+              ValueFrom: !Ref DemoPostgresPassword
+            - Name: RSA_KEY_CONTENTS
+              ValueFrom: !Ref RsaKeyIdentity
+          Environment:
+            - Name: SCAN_CMD
+              Value: warehouse.yml tables/car_ownership.yml
+            - Name: REPO_URI
+              Value: git@github.com:sodadata/soda-sql-cloud-runner.git
+            - Name: WORKING_DIR
+              Value: soda-sql-example
+
+  # A SodaSqlTaskSchedule instructs Soda SQL to run scans at regular intervals, using a
+  # cron job to define the interval. A SodaSqlTaskSchedule is associated with one TaskDefinition.
+  SodaSqlTaskScheduleCars:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Spawn a Soda SQL Scan on a regular interval
+      Name: !Join [ "_", [ !Ref ClusterName, "Cars" ] ]
+      ScheduleExpression: "cron(30 13 ? * MON-FRI *)"
+      State: ENABLED
+      Targets:
+        - Id: !Join [ "_", [ !Ref ClusterName, "CarsTask" ] ]
+          RoleArn: !GetAtt 'TaskSchedulerRole.Arn'
+          Arn: !GetAtt 'ECSCluster.Arn'
+          EcsParameters:
+            LaunchType: FARGATE
+            TaskCount: 1
+            TaskDefinitionArn: !Ref TaskDefinitionCars
+            PlatformVersion: LATEST
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: DISABLED
+                Subnets:
+                  - !Ref PrivateSubnetOne
+
+  #
+  # =========================== DON'T EDIT BELOW ===========================
+  #
+  # Setup the required network resources below. Each container will run
+  # in a private subnet, and will be able to use a NAT gateway which runs in the
+  # public subnet to route traffic to the world-wide-web
+  # (also required for fetching the Docker image, even from ECR)
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !Ref VpcCidr
+
+  PrivateSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 0
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !Ref PrivateSubnetCidr
+
+  PublicSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 0
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !Ref PublicSubnetCidr
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachement:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref 'VPC'
+      InternetGatewayId: !Ref 'InternetGateway'
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachement
+    Properties:
+      RouteTableId: !Ref 'PublicRouteTable'
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref 'InternetGateway'
+  PublicSubnetOneRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetOne
+      RouteTableId: !Ref PublicRouteTable
+  NatGatewayAttachment:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachement
+    Properties:
+        Domain: vpc
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayAttachment.AllocationId
+      SubnetId: !Ref PublicSubnetOne
+  PrivateRouteTableOne:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+  PrivateRouteOne:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableOne
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+  PrivateRouteTableOneAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableOne
+      SubnetId: !Ref PrivateSubnetOne
+
+  # SSM Parameters and Secrets which holding secrets exposed to the Soda SQL container.
+  # You may add or remove parameters and secrets to match your own project setup.
+  ApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Join ['', [/, !Ref ClusterName, /soda-cloud-api-key-secret]]
+      Description: The Soda Cloud API Key Secret made available to each Soda SQL scan
+      SecretString: !Ref ApiKeySecretParam
+  ApiKeyId:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Join ['', [/, !Ref ClusterName, /soda-cloud-api-key-id]]
+      Description: The Soda Cloud API Key ID made available to each Soda SQL scan
+      Type: String
+      Value: !Ref ApiKeyIdParam
+  RsaKeyIdentity:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Join ['', [/, !Ref ClusterName, /soda-sql-rsa-identity]]
+      Description: The RSA identity used to contact the Git repository over SSH
+      SecretString: override-me-after-creation
+  # The Parameters below are specifically used for the Example Soda SQL project. You may
+  # remove are amend them to fit your own project.
+  DemoPostgresUsername:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Join ['', [/, !Ref ClusterName, /demo-data-postgres-username]]
+      Description: The Soda Cloud API Key ID made available to each Soda SQL scan
+      Type: String
+      Value: !Ref DemoPostgresUsernameParam
+  DemoPostgresPassword:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Join ['', [/, !Ref ClusterName, /demo-data-postgres-password]]
+      Description: The password of the Demo Data Postgres Database.
+      Type: String
+      Value: !Ref DemoPostgresPasswordParam
+
+  # Some default components needed to run the ECS Cluster and execute the Soda SQL Scans.
+  # Can be left as-is, but if you created or modified resources (like parameters and secrets)
+  # you might need to add them to the correct policies.
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ClusterName
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref ClusterName, ExecutionRole]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Effect: "Allow"
+                Action: "ssm:GetParameters"
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ApiKeyId}
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DemoPostgresUsername}
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DemoPostgresPassword}
+              - Effect: "Allow"
+                Action:
+                  - "secretsmanager:GetResourcePolicy"
+                  - "secretsmanager:GetSecretValue"
+                  - "secretsmanager:DescribeSecret"
+                  - "secretsmanager:ListSecretVersionIds"
+                Resource:
+                  - !Ref RsaKeyIdentity
+                  - !Ref ApiKeySecret
+          PolicyName: "TaskExecutorPolicy"
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service: "ecs-tasks.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref ClusterName
+      RetentionInDays: 30
+
+  TaskSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "events.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Effect: "Allow"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !GetAtt 'ECSCluster.Arn'
+                Action: "ecs:RunTask"
+                Resource: "*"
+              - Effect: "Allow"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !GetAtt 'ECSCluster.Arn'
+                Action:
+                  - "iam:ListInstanceProfiles"
+                  - "iam:ListRoles"
+                  - "iam:PassRole"
+                Resource: "*"
+          PolicyName: "TaskSchedulerPolicy"
+
+
+Outputs:
+  ClusterName:
+    Description: The name of the ECS cluster
+    Value: !Ref 'ECSCluster'
+  VPCId:
+    Description: The ID of the VPC that this stack is deployed in
+    Value: !Ref 'VPC'
+  NatPublicIp:
+    Description: NatPublicIp
+    Value: !Ref NatGatewayAttachment
+  PrivateSubnetOne:
+    Description: Private subnet one
+    Value: !Ref 'PrivateSubnetOne'
+  RsaKeyIdentity:
+    Description: Secret holding your Private Key filecontent
+    Value: !Ref 'RsaKeyIdentity'
+
+# =========================== DON'T EDIT ABOVE ===========================

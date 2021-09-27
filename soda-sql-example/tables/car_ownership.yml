@@ -1,0 +1,31 @@
+table_name: car_ownership
+metrics:
+  - row_count
+  - sum
+  - missing_count
+  - stddev
+  - variance
+  - avg_length
+  - valid_count
+  - distinct
+  - histogram
+  - mins
+  - maxs
+  - frequent_values
+
+tests:
+  - row_count > 0
+
+columns:
+  model_year:
+    valid_format: number_whole
+    tests:
+      - invalid_percentage == 0
+  automatic:
+    tests:
+      - missing_percentage < 10
+  transaction_date:
+    valid_format: date_us
+    tests:
+      - invalid_percentage == 0
+      - missing_percentage == 0

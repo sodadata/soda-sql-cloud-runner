@@ -1,0 +1,18 @@
+# The environment variables referenced to below are defined
+# in the Cloudformation Template's TaskDefinitions. Make sure to
+# populate your environment with the correct environment values.
+
+name: soda_sql_demo_data
+connection:
+  type: postgres
+  host: soda-sql-cloud-runner-demo-data.cvabea4nmfjg.eu-west-1.rds.amazonaws.com
+  port: 5432
+  username: env_var(POSTGRES_USERNAME)
+  password: env_var(POSTGRES_PASSWORD)
+  database: postgres
+  schema: public
+
+soda_account:
+  host: cloud.soda.io
+  api_key_id: env_var(SODA_CLOUD_API_KEY_ID)
+  api_key_secret: env_var(SODA_CLOUD_API_KEY_SECRET)
