@@ -86,10 +86,10 @@ Note that adding sensitive values for parameters directly to the CloudFormation 
 
 
 **TaskDefinition**
-
+![cf1.png](/cf1.png)
 
 **SodaSqlTasksSchedule and Outputs**
-
+![cf2.png](/cf2.png)
 
 ### Customize the Docker Image
 
