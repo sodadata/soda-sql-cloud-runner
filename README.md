@@ -1,6 +1,6 @@
 # Use Soda SQL Cloud Runner to deploy Soda SQL in AWS 
 
-While you can deploy Soda SQL in a local on-premises environment, you may wish to deploy the command-line tool in your organization's cloud environment. The following procedure offers an example of how to deploy Soda SQL in AWS.
+While you can deploy Soda SQL in a local on-premises environment, you may wish to deploy the command-line tool in your organization's cloud environment. The following procedure and [accompanying code](https://github.com/sodadata/soda-sql-cloud-runner) offers an example of how to deploy Soda SQL in AWS.
 
 ## Prerequisites
 
